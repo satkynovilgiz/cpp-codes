@@ -22,8 +22,6 @@
 # def isAnagram(s, t):
 #     return sorted(s) == sorted(t)
 
-
-
 # 3. Contains Duplicate
 
 # nums = [1,2,3,1]
