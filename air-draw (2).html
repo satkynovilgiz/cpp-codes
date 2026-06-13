@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Air Draw — Draw with your hands</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+  :root{
+    --ink:#111318;
+    --paper:#101015;
+    --panel:#1a1c24;
+    --line:#2d303a;
+    --accent:#7ef9d9;
+    --accent2:#ff7ad1;
+    --mono: 'JetBrains Mono', monospace;
+    --display: 'Space Grotesk', system-ui, sans-serif;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background: var(--paper);
+    color: #eee;
+    font-family: var(--display);
+    min-height:100vh;
+    padding: 24px;
+  }
+  .wrap{ max-width: 1000px; margin: 0 auto; }
+
+  header{
+    display:flex; justify-content:space-between; align-items:flex-end;
+    margin-bottom: 18px; flex-wrap:wrap; gap:10px;
+    border-bottom: 2px solid var(--line);
+    padding-bottom: 14px;
+  }
+  h1{
+    font-size: 1.8rem; font-weight:700; letter-spacing:-0.02em;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .tag{ font-family: var(--mono); font-size: 0.8rem; color:#888; }
+
+  #status{
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    padding: 8px 14px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: 4px;
+    margin-bottom: 16px;
+    display:inline-block;
+  }
+  #status.ok{ border-color: var(--accent); color: var(--accent); }
+  #status.warn{ border-color: var(--accent2); color: var(--accent2); }
+
+  .stage{
+    position:relative;
+    width:100%;
+    aspect-ratio: 4/3;
+    background:#000;
+    border-radius:8px;
+    overflow:hidden;
+    border: 1px solid var(--line);
+  }
+  video, canvas{
+    position:absolute; top:0; left:0;
+    width:100%; height:100%;
+    object-fit:cover;
+  }
+  video{ transform: scaleX(-1); } /* mirror */
+  #draw-canvas{ transform: scaleX(-1); } /* match mirrored video */
+  #ui-canvas{ transform: scaleX(-1); }
+
+  .controls{
+    margin-top:16px;
+    display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+  }
+  .swatch{
+    width:32px; height:32px; border-radius:50%;
+    border: 2px solid var(--line);
+    cursor:pointer;
+    transition: transform .1s, border-color .1s;
+  }
+  .swatch.active{ border-color:#fff; transform: scale(1.15); }
+
+  button{
+    font-family: var(--mono);
+    font-weight:600; font-size:0.85rem;
+    background: var(--panel);
+    color:#eee;
+    border:1px solid var(--line);
+    border-radius:4px;
+    padding: 10px 16px;
+    cursor:pointer;
+    transition: background .15s, border-color .15s;
+  }
+  button:hover{ border-color: var(--accent); color: var(--accent); }
+
+  .legend{
+    margin-top: 16px;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color:#999;
+    line-height: 1.7;
+    border-top: 1px solid var(--line);
+    padding-top: 14px;
+  }
+  .legend b{ color:#ddd; }
+
+  .brush-size{
+    display:flex; align-items:center; gap:8px;
+    font-family: var(--mono); font-size: 0.8rem; color:#999;
+  }
+  input[type=range]{ accent-color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+    
+    </div>
+  </header>
+
+  <div id="status" class="warn">loading hand-tracking model…</div>
+
+  <div class="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="draw-canvas"></canvas>
+    <canvas id="ui-canvas"></canvas>
+  </div>
+
+  <div class="controls">
+    <div class="swatch active" style="background:#7ef9d9" data-color="#7ef9d9"></div>
+    <div class="swatch" style="background:#ff7ad1" data-color="#ff7ad1"></div>
+    <div class="swatch" style="background:#ffd166" data-color="#ffd166"></div>
+    <div class="swatch" style="background:#5da9ff" data-color="#5da9ff"></div>
+    <div class="swatch" style="background:#ffffff" data-color="#ffffff"></div>
+
+    <div class="brush-size">
+      brush
+      <input type="range" id="brush-size" min="2" max="20" value="6">
+    </div>
+
+    <button id="clear-btn">Clear canvas</button>
+    <button id="save-btn">Save drawing</button>
+  </div>
+
+  <div class="legend">
+   
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script>
+const video = document.getElementById('video');
+const drawCanvas = document.getElementById('draw-canvas');
+const uiCanvas = document.getElementById('ui-canvas');
+const drawCtx = drawCanvas.getContext('2d');
+const uiCtx = uiCanvas.getContext('2d');
+const statusEl = document.getElementById('status');
+
+let currentColor = '#7ef9d9';
+let brushSize = 6;
+let lastPoint = null;
+let isDrawing = false;
+
+// Color swatches
+document.querySelectorAll('.swatch').forEach(sw => {
+  sw.addEventListener('click', () => {
+    document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+    sw.classList.add('active');
+    currentColor = sw.dataset.color;
+  });
+});
+
+document.getElementById('brush-size').addEventListener('input', e => {
+  brushSize = parseInt(e.target.value, 10);
+});
+
+document.getElementById('clear-btn').addEventListener('click', () => {
+  drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+});
+
+document.getElementById('save-btn').addEventListener('click', () => {
+  const link = document.createElement('a');
+  link.download = 'air-drawing.png';
+  link.href = drawCanvas.toDataURL('image/png');
+  link.click();
+});
+
+function resizeCanvases(){
+  const rect = video.getBoundingClientRect();
+  const w = Math.round(rect.width);
+  const h = Math.round(rect.height);
+  if (w === 0 || h === 0) return;
+
+  [drawCanvas, uiCanvas].forEach(c => {
+    if (c.width !== w || c.height !== h) {
+      if (c === drawCanvas) {
+        // preserve existing drawing across resize
+        const prev = document.createElement('canvas');
+        prev.width = c.width;
+        prev.height = c.height;
+        if (c.width > 0 && c.height > 0) {
+          prev.getContext('2d').drawImage(c, 0, 0);
+        }
+        c.width = w;
+        c.height = h;
+        if (prev.width > 0 && prev.height > 0) {
+          drawCtx.drawImage(prev, 0, 0, prev.width, prev.height, 0, 0, w, h);
+        }
+      } else {
+        c.width = w;
+        c.height = h;
+      }
+    }
+  });
+}
+window.addEventListener('resize', resizeCanvases);
+
+// One-time setup once video metadata is known, so canvases don't keep resizing every frame
+let canvasesInitialized = false;
+
+// distance between thumb tip (4) and index tip (8)
+function dist(a, b){
+  const dx = a.x - b.x, dy = a.y - b.y, dz = (a.z||0) - (b.z||0);
+  return Math.sqrt(dx*dx + dy*dy + dz*dz);
+}
+
+const hands = new Hands({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.6,
+  minTrackingConfidence: 0.6
+});
+
+hands.onResults(onResults);
+
+function onResults(results){
+  resizeCanvases();
+  uiCtx.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
+
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+    lastPoint = null;
+    isDrawing = false;
+    statusEl.textContent = 'no hand detected — show your hand to the camera';
+    statusEl.className = 'warn';
+    return;
+  }
+
+  const lm = results.multiHandLandmarks[0];
+  const thumbTip = lm[4];
+  const indexTip = lm[8];
+
+  // Pinch detection (normalized coords, distance threshold)
+  const pinchDist = dist(thumbTip, indexTip);
+  const pinching = pinchDist < 0.08;
+
+  statusEl.textContent = pinching
+    ? `drawing — pinch distance ${pinchDist.toFixed(3)}`
+    : `hand detected — pinch distance ${pinchDist.toFixed(3)} (need < 0.08 to draw)`;
+  statusEl.className = pinching ? 'ok' : 'warn';
+
+  // Cursor position = index fingertip, scaled to canvas
+  // Note: video is mirrored via CSS, but landmarks come from unmirrored frame.
+  // Canvas is also mirrored via CSS, so use raw coords directly.
+  const x = indexTip.x * uiCanvas.width;
+  const y = indexTip.y * uiCanvas.height;
+
+  // Draw cursor indicator
+  uiCtx.beginPath();
+  uiCtx.arc(x, y, pinching ? brushSize/2 + 4 : 10, 0, Math.PI*2);
+  uiCtx.strokeStyle = pinching ? currentColor : 'rgba(255,255,255,0.5)';
+  uiCtx.lineWidth = 2;
+  uiCtx.stroke();
+
+  if (pinching) {
+    drawCtx.lineCap = 'round';
+    drawCtx.lineJoin = 'round';
+    drawCtx.strokeStyle = currentColor;
+    drawCtx.lineWidth = brushSize;
+
+    if (lastPoint) {
+      drawCtx.beginPath();
+      drawCtx.moveTo(lastPoint.x, lastPoint.y);
+      drawCtx.lineTo(x, y);
+      drawCtx.stroke();
+    }
+    lastPoint = { x, y };
+    isDrawing = true;
+  } else {
+    lastPoint = null;
+    isDrawing = false;
+  }
+}
+
+async function start(){
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    video.srcObject = stream;
+    await video.play();
+
+    resizeCanvases();
+    statusEl.textContent = 'ready — pinch thumb + index finger to draw';
+    statusEl.className = 'ok';
+
+    const camera = new Camera(video, {
+      onFrame: async () => { await hands.send({ image: video }); },
+      width: 640,
+      height: 480
+    });
+    camera.start();
+
+  } catch (e) {
+    statusEl.textContent = 'camera access denied or unavailable: ' + e.message;
+    statusEl.className = 'warn';
+  }
+}
+
+start();
+</script>
+</body>
+</html>

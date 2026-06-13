@@ -95,7 +95,6 @@ int main() {
         {100, 100, 100, 100}, 
         {10, 50, 0, 0} 
     };
-    
     int atLeast3, c100;
     int atLeastOneZero = calcStudentScores(stuScoreList6, 6, atLeast3, c100);
 

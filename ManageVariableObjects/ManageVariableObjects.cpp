@@ -76,4 +76,4 @@ void processCommand(const string& line, VariableListManager& manager, bool& keep
             manager.displayVariable(token1);
         }
     }
-}
+}gitngigigitini
